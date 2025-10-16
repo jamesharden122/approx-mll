@@ -21,6 +21,22 @@ Approximate models and utilities for stochastic characteristic functions in Mojo
 - Use from code:
   - `from stochcharfunc import Svj1JointCF, ComplexSIMD, CFGrid`
 
+## Build
+- Install env: `cd approx-mll && pixi install`
+- Run via Pixi: `pixi run mojo main.mojo` (or `pixi shell && mojo run main.mojo`).
+- Optimized run: `mojo run -O main.mojo` inside the Pixi shell.
+- Tip: run from the `approx-mll` folder so module imports (`stochcharfunc`, `complexsimd`) resolve.
+
+### Build an executable (mojo build)
+- Basic: `cd approx-mll && pixi shell && mojo build main.mojo`
+- Optimized and named output: `mojo build -O main.mojo -o build/approx-mll`
+- Include paths (if building from elsewhere): `mojo build -I . main.mojo`
+- Other outputs: `--emit shared-lib | object | asm | llvm | py-ext`
+
+Run the built binary: `./build/approx-mll`
+
+Note: Python libraries used by Mojo aren’t bundled; they must exist in the runtime environment.
+
 ## Reference
 - Bates, D. (2006), Review of Financial Studies — Maximum-likelihood estimation approach for latent affine/jump-diffusion models. See `papers/Bates mle RFS 06.pdf`.
   - This repository follows the Bates-style method as the baseline reference for the characteristic-function workflow (calibration and inference context), adapted to Mojo and SIMD primitives.
