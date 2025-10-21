@@ -1,6 +1,6 @@
 from complexsimd.complex_simd import ComplexSIMD
 
-struct CFGridSIMD[T: DType, L: Int]:
+struct CFGridSIMD[T: DType, L: Int](Copyable, Movable):
     # SIMD-tiled complex CF grid with N components (dimensions), where N is
     # inferred at runtime from the size of k_valid_per_comp.
     # Lane layout per tile: lanes are split into N contiguous components.
@@ -12,20 +12,20 @@ struct CFGridSIMD[T: DType, L: Int]:
     var k_valid_per_comp: List[Int]   # logical scalar count per component
 
     fn __init__(out self, re_tiles: List[SIMD[T, L]], im_tiles: List[SIMD[T, L]], k_valid_per_comp: List[Int]):
-        self.re_tiles = ^re_tiles
-        self.im_tiles = ^im_tiles
-        self.k_valid_per_comp = ^k_valid_per_comp
+        self.re_tiles = re_tiles.copy()
+        self.im_tiles = im_tiles.copy()
+        self.k_valid_per_comp = k_valid_per_comp.copy()
 
     fn num_components(self) -> Int:
-        return self.k_valid_per_comp.size
+        return len(self.k_valid_per_comp)
 
     fn lanes_per_component(self) -> Int:
         # W = L / N
-        let n = self.num_components()
+        var n = self.num_components()
         return L / n
 
     fn num_tiles(self) -> Int:
-        return self.re_tiles.size
+        return len(self.re_tiles)
 
     fn lane(self, tile: Int) -> ComplexSIMD[T, L]:
         return ComplexSIMD[T, L](self.re_tiles[tile], self.im_tiles[tile])
@@ -35,29 +35,32 @@ struct CFGridSIMD[T: DType, L: Int]:
         self.im_tiles[tile] = z.im
 
     fn component_tile_count(self, comp: Int) -> Int:
-        let W = self.lanes_per_component()
-        let k = self.k_valid_per_comp[comp]
+        var W = self.lanes_per_component()
+        var k = self.k_valid_per_comp[comp]
         return (k + W - 1) / W
 
     # Map a component scalar index -> (tile, lane_idx)
     fn _map_index(self, comp: Int, idx: Int) -> (Int, Int):
-        let W = self.lanes_per_component()
-        let tile = idx / W
-        let off  = idx % W
-        let lane = comp * W + off
+        var W = self.lanes_per_component()
+        var tile = idx / W
+        var off  = idx % W
+        var lane = comp * W + off
         return (tile, lane)
 
     fn get_component_value(self, comp: Int, idx: Int) -> (Scalar[T], Scalar[T]):
-        let (tile, lane) = self._map_index(comp, idx)
-        let z = self.tiles[tile]
-        return (z.re[lane], z.im[lane])
+        var (tile, lane) = self._map_index(comp, idx)
+        var r = self.re_tiles[tile]
+        var i = self.im_tiles[tile]
+        return (r[lane], i[lane])
 
     fn set_component_value(mut self, comp: Int, idx: Int, re: Scalar[T], im: Scalar[T]):
-        let (tile, lane) = self._map_index(comp, idx)
-        var z = self.tiles[tile]
-        z.re[lane] = re
-        z.im[lane] = im
-        self.tiles[tile] = z
+        var (tile, lane) = self._map_index(comp, idx)
+        var r = self.re_tiles[tile]
+        var i = self.im_tiles[tile]
+        r[lane] = re
+        i[lane] = im
+        self.re_tiles[tile] = r
+        self.im_tiles[tile] = i
 
     @staticmethod
     fn from_components(
@@ -65,11 +68,11 @@ struct CFGridSIMD[T: DType, L: Int]:
         im_components: List[List[Scalar[T]]]
     ) -> Self:
         # Build a CFGridSIMD by packing N component vectors into tiles.
-        let N = re_components.size
-        if im_components.size != N:
+        var N = len(re_components)
+        if len(im_components) != N:
             print("CFGridSIMD: component list size mismatch")
 
-        let W = L / N
+        var W = L / N
         if W * N != L:
             print("CFGridSIMD: L % N != 0; last lanes will be zero-padded")
 
@@ -77,9 +80,11 @@ struct CFGridSIMD[T: DType, L: Int]:
         k_valid.reserve(N)
         var max_tiles = 0
         for c in range(N):
-            let kc = re_components[c].size if re_components[c].size <= im_components[c].size else im_components[c].size
-            k_valid.push_back(kc)
-            let tiles_c = (kc + W - 1) / W
+            var rc_sz = len(re_components[c])
+            var ic_sz = len(im_components[c])
+            var kc = rc_sz if rc_sz <= ic_sz else ic_sz
+            k_valid.append(kc)
+            var tiles_c = (kc + W - 1) / W
             if tiles_c > max_tiles:
                 max_tiles = tiles_c
 
@@ -93,23 +98,23 @@ struct CFGridSIMD[T: DType, L: Int]:
             # fill all components for tile t
             for c in range(N):
                 for off in range(W):
-                    let lane = c * W + off
-                    let idx  = t * W + off
+                    var lane = c * W + off
+                    var idx  = t * W + off
                     if idx < k_valid[c]:
                         r[lane] = re_components[c][idx]
                         i[lane] = im_components[c][idx]
                     else:
                         r[lane] = Scalar[T](0)
                         i[lane] = Scalar[T](0)
-            re_tiles.push_back(r)
-            im_tiles.push_back(i)
+            re_tiles.append(r)
+            im_tiles.append(i)
 
         return Self(re_tiles, im_tiles, k_valid)
 
     fn to_components(self) -> (List[List[Scalar[T]]], List[List[Scalar[T]]]):
         # Unpack into N component vectors (drop padded tails)
-        let W = self.lanes_per_component()
-        let N = self.num_components()
+        var W = self.lanes_per_component()
+        var N = self.num_components()
         var out_re = List[List[Scalar[T]]]()
         var out_im = List[List[Scalar[T]]]()
         out_re.reserve(N)
@@ -119,17 +124,17 @@ struct CFGridSIMD[T: DType, L: Int]:
             var im_c = List[Scalar[T]]()
             re_c.reserve(self.k_valid_per_comp[c])
             im_c.reserve(self.k_valid_per_comp[c])
-            let kc = self.k_valid_per_comp[c]
-            let tiles_c = (kc + W - 1) / W
+            var kc = self.k_valid_per_comp[c]
+            var tiles_c = (kc + W - 1) / W
             for t in range(tiles_c):
-                let r = self.re_tiles[t]
-                let i = self.im_tiles[t]
+                var r = self.re_tiles[t]
+                var i = self.im_tiles[t]
                 for off in range(W):
-                    let idx = t * W + off
+                    var idx = t * W + off
                     if idx < kc:
-                        let lane = c * W + off
-                        re_c.push_back(r[lane])
-                        im_c.push_back(i[lane])
-            out_re.push_back(re_c)
-            out_im.push_back(im_c)
+                        var lane = c * W + off
+                        re_c.append(r[lane])
+                        im_c.append(i[lane])
+            out_re.append(re_c)
+            out_im.append(im_c)
         return (out_re, out_im)

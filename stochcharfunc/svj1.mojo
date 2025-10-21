@@ -1,13 +1,12 @@
 from complexsimd import ComplexSIMD
 from math import sqrt, exp, log, cos, sin
 
+# Marker trait for parameter structs (kept per request).
 trait Params:
-    fn get_params(self) -> Self
-    fn set_params(mut self, params: Self)
+    pass
 
 
-
-struct Svj1Params(Params):
+struct Svj1Params(Params, Copyable, Movable):
     var mu0: Float64
     var mu1: Float64
     var lambda0: Float64
@@ -44,18 +43,6 @@ struct Svj1Params(Params):
         self.dt = dt
 
     fn get_params(self) -> Self:
-        print(
-            "mu0:", self.mu0,
-            "mu1:", self.mu1,
-            "rho:", self.rho,
-            "alpha:", self.alpha,
-            "beta:", self.beta,
-            "volvol:", self.volvol,
-            "lambda0:", self.lambda0,
-            "lambda1:", self.lambda1,
-            "k:", self.k,
-            "dt:", self.dt
-        )
         return self
 
     fn set_params(mut self, params: Self):
@@ -70,49 +57,60 @@ struct Svj1Params(Params):
         self.k = params.k
         self.dt = params.dt
  
-trait SvSpec[T: Params]:
-    fn __init__(out self, params: T)
+trait SvSpec:
+    fn predictive_cf_latent_simd_re[L: Int](
+        self,
+        phi: SIMD[DType.float64, L],
+        prior_params: List[Float64]
+    ) -> SIMD[DType.float64, L]:
+        pass
+    fn predictive_cf_latent_simd_im[L: Int](
+        self,
+        phi: SIMD[DType.float64, L],
+        prior_params: List[Float64]
+    ) -> SIMD[DType.float64, L]:
+        pass
 
-struct Svj1JointCF(SvSpec[Svj1Params]):
+struct Svj1JointCF(SvSpec):
     var params: Svj1Params
 
     fn __init__(out self, params: Svj1Params):
-        self.params = ^params
+        self.params = params.copy()
 
     fn _riccati_sv1_simd[L: Int](self, Phi: SIMD[DType.float64, L], psi0: Float64) -> (SIMD[DType.float64, L], SIMD[DType.float64, L]):
-        let dt = self.params.dt
-        let sig = self.params.volvol
-        let a: Float64 = 0.5 * sig * sig
-        let b = SIMD[DType.float64, L](self.params.rho * sig) * Phi - SIMD[DType.float64, L](self.params.beta)
-        let c = SIMD[DType.float64, L](0.5) * (Phi * Phi) + SIMD[DType.float64, L](self.params.mu1 - 0.5) * Phi
-        let disc = b * b - SIMD[DType.float64, L](4.0 * a) * c
-        let g = sqrt(disc)
+        var dt = self.params.dt
+        var sig = self.params.volvol
+        var a: Float64 = 0.5 * sig * sig
+        var b = SIMD[DType.float64, L](self.params.rho * sig) * Phi - SIMD[DType.float64, L](self.params.beta)
+        var c = SIMD[DType.float64, L](0.5) * (Phi * Phi) + SIMD[DType.float64, L](self.params.mu1 - 0.5) * Phi
+        var disc = b * b - SIMD[DType.float64, L](4.0 * a) * c
+        var g = sqrt(disc)
 
-        let two_a = 2.0 * a
+        var two_a = 2.0 * a
         var y1 = (-b + g) / SIMD[DType.float64, L](two_a if two_a != 0.0 else 1.0)
         var y2 = (-b - g) / SIMD[DType.float64, L](two_a if two_a != 0.0 else 1.0)
         if two_a == 0.0:
             y1 = -c / (b + SIMD[DType.float64, L](1e-15))
             y2 = SIMD[DType.float64, L](0.0)
 
-        let denom0 = y1 - SIMD[DType.float64, L](psi0)
-        let z0 = (SIMD[DType.float64, L](psi0) - y2) / (denom0 + SIMD[DType.float64, L](1e-15))
-        let zdt = z0 * exp(-g * SIMD[DType.float64, L](dt))
+        var denom0 = y1 - SIMD[DType.float64, L](psi0)
+        var z0 = (SIMD[DType.float64, L](psi0) - y2) / (denom0 + SIMD[DType.float64, L](1e-15))
+        var zdt = z0 * exp(-g * SIMD[DType.float64, L](dt))
 
-        let D = (y2 + y1 * zdt) / (SIMD[DType.float64, L](1.0) + zdt)
-        let log1p_z0  = log(SIMD[DType.float64, L](1.0) + z0)
-        let log1p_zdt = log(SIMD[DType.float64, L](1.0) + zdt)
-        let g_safe = g + SIMD[DType.float64, L](1e-15)
-        let integral_D =
+        var D = (y2 + y1 * zdt) / (SIMD[DType.float64, L](1.0) + zdt)
+        var log1p_z0  = log(SIMD[DType.float64, L](1.0) + z0)
+        var log1p_zdt = log(SIMD[DType.float64, L](1.0) + zdt)
+        var g_safe = g + SIMD[DType.float64, L](1e-15)
+        var integral_D =
             SIMD[DType.float64, L](self.params.alpha) * (
                 y2 * SIMD[DType.float64, L](dt)
                 - ((y1 - y2) / g_safe) * (log1p_zdt - log1p_z0)
             )
-        let C = SIMD[DType.float64, L](self.params.mu0 * dt) * Phi + integral_D
+        var C = SIMD[DType.float64, L](self.params.mu0 * dt) * Phi + integral_D
         return (C, D)
 
     fn _gamma_mgf_complex_simd[L: Int](self, D: SIMD[DType.float64, L], kappa: Float64, nu: Float64) -> SIMD[DType.float64, L]:
-        let x = SIMD[DType.float64, L](1.0) - SIMD[DType.float64, L](kappa) * D
+        var x = SIMD[DType.float64, L](1.0) - SIMD[DType.float64, L](kappa) * D
         return exp(SIMD[DType.float64, L](-nu) * log(x))
 
     fn predictive_cf_latent_simd[L: Int](
@@ -122,33 +120,37 @@ struct Svj1JointCF(SvSpec[Svj1Params]):
         kappa: Float64,
         nu: Float64
     ) -> ComplexSIMD[DType.float64, L]:
-        let (C, D) = self._riccati_sv1_simd[L](phi, 0.0)
-        let eC = exp(C)
-        let G  = self._gamma_mgf_complex_simd[L](D, kappa, nu)
-        let c = cos(phi * SIMD[DType.float64, L](y))
-        let s = sin(phi * SIMD[DType.float64, L](y))
-        let mag = eC * G
+        var (C, D) = self._riccati_sv1_simd[L](phi, 0.0)
+        var eC = exp(C)
+        var G  = self._gamma_mgf_complex_simd[L](D, kappa, nu)
+        var c = cos(phi * SIMD[DType.float64, L](y))
+        var s = sin(phi * SIMD[DType.float64, L](y))
+        var mag = eC * G
         return ComplexSIMD[DType.float64, L](mag * c, mag * s)
 
     # SIMD real/imag parts separately (no lane loops)
     fn predictive_cf_latent_simd_re[L: Int](
         self,
         phi: SIMD[DType.float64, L],
-        prior_params: Slice[Float64]# [y: Float64, kappa: Float64, nu: Float64]
+        prior_params: List[Float64]
     ) -> SIMD[DType.float64, L]:
-        let (C, D) = self._riccati_sv1_simd[L](phi, 0.0)
-        let mag = exp(C) * self._gamma_mgf_complex_simd[L](D, prior_params[1], prior_params[2])
-        let c = cos(phi * SIMD[DType.float64, L](prior_params[0]))
+        var (C, D) = self._riccati_sv1_simd[L](phi, 0.0)
+        var y = prior_params[0]
+        var kappa = prior_params[1]
+        var nu = prior_params[2]
+        var mag = exp(C) * self._gamma_mgf_complex_simd[L](D, kappa, nu)
+        var c = cos(phi * SIMD[DType.float64, L](y))
         return mag * c
 
     fn predictive_cf_latent_simd_im[L: Int](
         self,
         phi: SIMD[DType.float64, L],
-        prior_params: Slice[Float64]# [y: Float64, kappa: Float64, nu: Float64]
+        prior_params: List[Float64]
     ) -> SIMD[DType.float64, L]:
-        let (C, D) = self._riccati_sv1_simd[L](phi, 0.0)
-        let mag = exp(C) * self._gamma_mgf_complex_simd[L](D, prior_params[1], prior_params[2])
-        let s = sin(phi * SIMD[DType.float64, L](prior_params[0]))
+        var (C, D) = self._riccati_sv1_simd[L](phi, 0.0)
+        var y = prior_params[0]
+        var kappa = prior_params[1]
+        var nu = prior_params[2]
+        var mag = exp(C) * self._gamma_mgf_complex_simd[L](D, kappa, nu)
+        var s = sin(phi * SIMD[DType.float64, L](y))
         return mag * s
-
-

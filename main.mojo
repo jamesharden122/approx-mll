@@ -1,4 +1,5 @@
 from stochcharfunc import Svj1JointCF
+from stochcharfunc.svj1 import Svj1Params
 from complexsimd import (
     ComplexSIMD,
     CFGridSIMD,
@@ -16,7 +17,7 @@ fn main():
     var Ltiles: Int = 8          # SIMD width
     var tiles: Int = Int(K / Ltiles)  # number of SIMD tiles
 
-    var model = Svj1JointCF()
+    var model = Svj1JointCF(Svj1Params())
 
     # Build a dummy CFGridSIMD with the desired tile shape (content is sampled via callbacks);
     # here it's only used to convey tile count and layout to the inverter.
@@ -29,16 +30,15 @@ fn main():
     k_valid.append(tiles * 8)
     var grid = CFGridSIMD[DType.float64, 8](re_tiles, im_tiles, k_valid)
 
-    # Vectorized CF callbacks (split into real and imaginary parts)
-    # Vectorized CF callbacks (split into real and imaginary parts)
-    var cf_re = fn(phi: SIMD[DType.float64, 8]) capturing -> SIMD[DType.float64, 8]:
-        return model.predictive_cf_latent_simd_re[8](phi, y, kappa, nu)
-    var cf_im = fn(phi: SIMD[DType.float64, 8]) capturing -> SIMD[DType.float64, 8]:
-        return model.predictive_cf_latent_simd_im[8](phi, y, kappa, nu)
+    # Prior params as [y, kappa, nu]
+    var prior = List[Float64]()
+    prior.append(y)
+    prior.append(kappa)
+    prior.append(nu)
 
     # Invert at a single x (time/space) point
     var x: Float64 = 0.1
     var inverter = UniformGridInverterSIMDGrid[8](grid)
-    var out = inverter.inverse_at(x, u0, du, cf_re, cf_im, normalize=True)
+    var out = inverter.inverse_at(x, u0, du, model, prior, normalize=True)
 
     print("Inverse Fourier at x=", x, ": re=", out.re[0], ", im=", out.im[0])
