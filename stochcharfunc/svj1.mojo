@@ -2,7 +2,7 @@ from complexsimd import ComplexSIMD
 from math import sqrt, exp, log, cos, sin
 
 # Marker trait for parameter structs (kept per request).
-trait Params:
+trait Params(Copyable, Movable):
     pass
 
 
@@ -57,7 +57,7 @@ struct Svj1Params(Params, Copyable, Movable):
         self.k = params.k
         self.dt = params.dt
  
-trait SvSpec:
+trait SvSpec(Copyable, Movable):
     fn predictive_cf_latent_simd_re[L: Int](
         self,
         phi: SIMD[DType.float64, L],
@@ -71,7 +71,7 @@ trait SvSpec:
     ) -> SIMD[DType.float64, L]:
         pass
 
-struct Svj1JointCF(SvSpec):
+struct Svj1JointCF(SvSpec,Copyable, Movable):
     var params: Svj1Params
 
     fn __init__(out self, params: Svj1Params):

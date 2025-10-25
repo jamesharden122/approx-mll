@@ -5,6 +5,7 @@ from complexsimd import (
     CFGridSIMD,
     UniformGridInverterSIMDGrid,
 )
+from optimizers import OptimFiniteDiffConfig
 
 fn main():
     # Model params (example values)
@@ -30,6 +31,14 @@ fn main():
     k_valid.append(tiles * 8)
     var grid = CFGridSIMD[DType.float64, 8](re_tiles, im_tiles, k_valid)
 
+    # Basic construction test of OptimFiniteDiffConfig
+    var cfg = OptimFiniteDiffConfig[Svj1Params, Svj1JointCF, 8](
+        Svj1Params(),
+        1e-3, 1e-4, 1.0, 0.5, 0.1,
+        grid,
+        model
+    )
+
     # Prior params as [y, kappa, nu]
     var prior = List[Float64]()
     prior.append(y)
@@ -41,4 +50,5 @@ fn main():
     var inverter = UniformGridInverterSIMDGrid[8](grid)
     var out = inverter.inverse_at(x, u0, du, model, prior, normalize=True)
 
+    print("OptimFiniteDiffConfig init ok; h=", cfg.h)
     print("Inverse Fourier at x=", x, ": re=", out.re[0], ", im=", out.im[0])
