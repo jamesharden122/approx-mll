@@ -1,7 +1,11 @@
 from stochcharfunc.svj1 import Params, SvSpec
 from complexsimd import CFGridSIMD, UniformGridInverterSIMDGrid
+from layout import Layout, LayoutTensor
+from math import sqrt
 
-struct OptimFiniteDiffConfig[P: Params, S: SvSpec, I: Int]:
+alias F = DType.float32
+
+struct OptimFiniteDiffConfig[P: Params, S: SvSpec, I: Int, D: Int]:
     var theta: P
     var h: Float64
     var armijo_c: Float64
@@ -10,7 +14,8 @@ struct OptimFiniteDiffConfig[P: Params, S: SvSpec, I: Int]:
     var min_thresh: Float64
     var inverter: UniformGridInverterSIMDGrid[I]
     var spec: S
-
+    # Working matrix for parameter updates (D x D)
+    var p_mat: LayoutTensor[DType.float64, Layout.row_major(D, D), MutableAnyOrigin]
     fn __init__(
         out self,
         theta: P,
@@ -30,3 +35,6 @@ struct OptimFiniteDiffConfig[P: Params, S: SvSpec, I: Int]:
         self.min_thresh = min_thresh
         self.inverter = UniformGridInverterSIMDGrid[I](grid)
         self.spec = spec.copy()
+        # Allocate storage and materialize the tensor with a row-major layout
+        var storage = InlineArray[Float64, D * D](uninitialized=True)
+        self.p_mat = LayoutTensor[DType.float64, Layout.row_major(D, D), MutableAnyOrigin](storage)
