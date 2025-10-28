@@ -2,6 +2,7 @@ from stochcharfunc import Svj1JointCF
 from stochcharfunc.svj1 import Svj1Params
 from complexsimd import CFGridSIMD
 from optimizers import OptimFiniteDiffConfig
+from optimizers import DirMethod
 
 fn fail(msg: String):
     print("FAIL:", msg)
@@ -27,7 +28,9 @@ fn test_optim_config_construction():
         Svj1Params(),
         1e-3, 1e-4, 1.0, 0.5, 0.1,
         grid,
-        model
+        model,
+        DirMethod.Gaussian()
+
     )
 
     if cfg.h != 1e-3:

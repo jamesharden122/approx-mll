@@ -1,4 +1,5 @@
 from stochcharfunc.svj1 import Params, SvSpec
+from .directions import DirMethod, DirectionMat
 from complexsimd import CFGridSIMD, UniformGridInverterSIMDGrid
 from layout import Layout, LayoutTensor
 from math import sqrt
@@ -25,7 +26,8 @@ struct OptimFiniteDiffConfig[P: Params, S: SvSpec, I: Int, D: Int]:
         eta_shrink: Float64,
         min_thresh: Float64,
         grid: CFGridSIMD[DType.float64, I],
-        spec: S
+        spec: S,
+        dir_meth: DirMethod
     ):
         self.theta = theta.copy()
         self.h = h
@@ -36,5 +38,19 @@ struct OptimFiniteDiffConfig[P: Params, S: SvSpec, I: Int, D: Int]:
         self.inverter = UniformGridInverterSIMDGrid[I](grid)
         self.spec = spec.copy()
         # Allocate storage and materialize the tensor with a row-major layout
-        var storage = InlineArray[Float64, D * D](uninitialized=True)
-        self.p_mat = LayoutTensor[DType.float64, Layout.row_major(D, D), MutableAnyOrigin](storage)
+        self.p_mat = DirectionMat[D](dir_meth).p_mat
+
+
+struct FD1[S: SvSpec, params: P, D: Int]:
+    var config: OptimFiniteDiffConfig
+    var g: SIMD[DType.float64,D]
+    fn __init__(out self, config: OptimFiniteDiffConfig, g_init):
+        self.config = config
+        self.g = 0
+    fn gradient(self, theta):
+        #function old parameters value
+        var theta_old_ll = self.spec(theta)
+        self.config.inverter.inverse_at[S](x,u0,du,cb,prior_params
+        for i in range(D):
+                                    #function new parameters value 
+            #fuction differnce divided by stepsize multiplied by direction
