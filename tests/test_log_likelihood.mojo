@@ -61,7 +61,7 @@ fn test_log_likelihood_basic():
     y_vec[6] = 0.02
     y_vec[7] = 0.0
 
-    var ll = log_likelihood[Svj1JointCF, 8](y_vec, inverter, model, prior, u0, du, True)
+    var ll = log_likelihood[Svj1JointCF, 8](y_vec, inverter, model, prior, True)
     var v = Float64(ll[0])
 
     if v != v:

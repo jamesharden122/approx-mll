@@ -1,3 +1,2 @@
-from .finitediff import OptimFiniteDiffConfig
+from .finitediff import OptimFiniteDiffConfig, FD1
 from .directions import DirMethod, DirectionMat
-

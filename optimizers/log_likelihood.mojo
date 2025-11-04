@@ -15,8 +15,6 @@ fn log_likelihood[S: SvSpec, L: Int](
     inverter: UniformGridInverterSIMDGrid[L],
     spec: S,
     prior_params: InlineArray[Float64, 3],
-    u0: Float64,
-    du: Float64,
     normalize: Bool = True,
 ) -> SIMD[DType.float64, 1]:
     var ll_sum: Float64 = 0.0
@@ -28,19 +26,20 @@ fn log_likelihood[S: SvSpec, L: Int](
         var x = Float64(y_vec[i])
         # Step 2 (Bates): density via inverse Fourier at x = y_{t+1}
         var z = inverter.inverse_at[S, 3](x, spec, psi0, prior, normalize)
-        var f = Float64(z.re[0]) * 2.0 * du
-        print(f)
-        if f <= 0.0:
+        var f = Float64(z.re[0])
+        # Guard against non-finite or non-positive densities
+        if (f != f) or (f <= 0.0):
             f = eps
         ll_sum += log(f)
 
         # Update Gamma prior parameters using integrated ψ-derivatives
         var (kappa_new, nu_new, _, _) = spec.update_gamma_prior_from_inverter[L](
-            inverter, prior, u0, du, 1e-6, normalize
+            inverter, prior, 1.0, 1.0, 1e-6, normalize
         )
-        # Roll prior forward: Y_t <- y_{t+1}, (kappa, nu) <- updated
+        # Roll prior forward only if update is finite
         prior[0] = x
-        prior[1] = kappa_new
-        prior[2] = nu_new
+        if (kappa_new == kappa_new) and (nu_new == nu_new):
+            prior[1] = kappa_new
+            prior[2] = nu_new
 
     return SIMD[DType.float64, 1](ll_sum)

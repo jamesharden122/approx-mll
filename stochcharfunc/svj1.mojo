@@ -5,7 +5,12 @@ from complexsimd import CFGridSIMD, UniformGridInverterSIMDGrid
 
 # Marker trait for parameter structs (kept per request).
 trait Params(Copyable, Movable):
+    # Keep method-level generic to satisfy callers that provide InlineArray[L].
     fn __init__[L: Int](out self, vals: InlineArray[Float64, L]):
+        pass
+    fn get_params[L: Int](self) -> InlineArray[Float64, L]:
+        pass
+    fn set_params_simd[L: Int](mut self, vals: SIMD[DType.float64, L]):
         pass
 
 struct Svj1Params(Params, Copyable, Movable):
@@ -47,20 +52,75 @@ struct Svj1Params(Params, Copyable, Movable):
         self.volvol = vals[8]
         self.dt     = vals[9]
 
-    fn get_params(self) -> Self:
-        return self
+    # Convenience constructor for the fixed 10-parameter case.
+    # Keeps the same index mapping as the generic __init__ above.
+    @always_inline
+    fn __init__(out self, vals: InlineArray[Float64, 10]):
+        self.mu0    = vals[0]
+        self.mu1    = vals[1]
+        self.lambda0= vals[2]
+        self.lambda1= vals[3]
+        self.k      = vals[4]
+        self.rho    = vals[5]
+        self.alpha  = vals[6]
+        self.beta   = vals[7]
+        self.volvol = vals[8]
+        self.dt     = vals[9]
 
-    fn set_params(mut self, params: Self):
-        self.mu0 = params.mu0
-        self.mu1 = params.mu1
-        self.rho = params.rho
-        self.alpha = params.alpha
-        self.beta = params.beta
-        self.volvol = params.volvol
-        self.lambda0 = params.lambda0
-        self.lambda1 = params.lambda1
-        self.k = params.k
-        self.dt = params.dt
+    fn get_params(self) -> InlineArray[Float64, 10]:
+        var vals = InlineArray[Float64, 10](uninitialized=True)
+        vals[0] = self.mu0 
+        vals[1] = self.mu1
+        vals[2] = self.lambda0
+        vals[3] = self.lambda1
+        vals[4] = self.k
+        vals[5] = self.rho
+        vals[6] = self.alpha
+        vals[7] = self.beta
+        vals[8] = self.volvol
+        vals[9] = self.dt
+        return vals
+
+    # Generic adapter: callers should use L >= 10 for this model
+    fn get_params[L: Int](self) -> InlineArray[Float64, L]:
+        var out = InlineArray[Float64, L](uninitialized=True)
+        var base = self.get_params()
+        out[0] = base[0]
+        out[1] = base[1]
+        out[2] = base[2]
+        out[3] = base[3]
+        out[4] = base[4]
+        out[5] = base[5]
+        out[6] = base[6]
+        out[7] = base[7]
+        out[8] = base[8]
+        out[9] = base[9]
+        return out
+
+    fn set_params_simd[L: Int](mut self, vals: SIMD[DType.float64, L]):
+        # Mirror set_params() field order using SIMD lane values (fixed width)
+        self.mu0     = Float64(vals[0])
+        self.mu1     = Float64(vals[1])
+        self.rho     = Float64(vals[2])
+        self.alpha   = Float64(vals[3])
+        self.beta    = Float64(vals[4])
+        self.volvol  = Float64(vals[5])
+        self.lambda0 = Float64(vals[6])
+        self.lambda1 = Float64(vals[7])
+        self.k       = Float64(vals[8])
+        self.dt      = Float64(vals[9])
+
+    fn set_params(mut self, vals: InlineArray[Float64, 10]):
+        self.mu0 = vals[0]#params.mu0
+        self.mu1 = vals[1]#params.mu1
+        self.rho = vals[2]#params.rho
+        self.alpha = vals[3]#params.alpha
+        self.beta = vals[4]#params.beta
+        self.volvol = vals[5] #params.volvol
+        self.lambda0 = vals[6] #params.lambda0
+        self.lambda1 = vals[7] #params.lambda1
+        self.k = vals[8] #params.k
+        self.dt = vals[9] #params.dt
  
 trait SvSpec(Copyable, Movable):
     fn predictive_cf_latent_simd_re[L: Int, T: Int](
@@ -88,12 +148,24 @@ trait SvSpec(Copyable, Movable):
         normalize: Bool = True               # include 1/(2π)
     ) -> (Float64, Float64, Float64, Float64):
         pass
+    fn set_params_simd[L: Int](mut self, vals: SIMD[DType.float64, L]):
+        pass
+    # New: allow setting parameters from InlineArray to avoid non-power-of-two SIMD widths
+    fn set_params_array[L: Int](mut self, vals: InlineArray[Float64, L]):
+        pass
 
 struct Svj1JointCF(SvSpec,Copyable, Movable):
     var params: Svj1Params
 
     fn __init__(out self, params: Svj1Params):
         self.params = params.copy()
+
+    fn set_params_simd[L: Int](mut self, vals: SIMD[DType.float64, L]):
+        self.params.set_params_simd[L](vals)
+
+    fn set_params_array[L: Int](mut self, vals: InlineArray[Float64, L]):
+        # Construct params directly from InlineArray (expects L >= 10)
+        self.params = Svj1Params.__init__[L](vals)
 
     fn _riccati_sv1_simd[L: Int](self, Phi: SIMD[DType.float64, L], psi0: SIMD[DType.float64, 1]) -> (SIMD[DType.float64, L], SIMD[DType.float64, L]):
         var dt = self.params.dt

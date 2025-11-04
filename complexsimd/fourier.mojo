@@ -12,7 +12,7 @@ from math import sin, cos
 # Note: Generic trait declarations with parameters are limited; we omit a trait here.
 
 
-struct UniformGridInverterSIMDGrid[L: Int]:
+struct UniformGridInverterSIMDGrid[L: Int](Copyable, Movable):
     var grid: CFGridSIMD[DType.float64, L]
 
     fn __init__(out self, grid: CFGridSIMD[DType.float64, L]):
