@@ -1,44 +1,35 @@
-from stochcharfunc import Svj1JointCF
-from stochcharfunc.svj1 import Svj1Params
-from complexsimd import (
-    ComplexSIMD,
-    CFGridSIMD,
-    UniformGridInverterSIMDGrid,
-)
-from optimizers import OptimFiniteDiffConfig, DirMethod, DirectionMat
-from layout import Layout, LayoutTensor
+from affine_svj import AffineSvjParams
+from stochcharfunc import AffineSvjJointCF
 
 
-fn simd_step[W: Int](d: SIMD[DType.float64, W], h: Float64, t: SIMD[DType.float64, W]) -> SIMD[DType.float64, W]:
-    return t + d.__mul__(SIMD[DType.float64, W](h))
-
-fn main():
-    var pmat_storage   = InlineArray[Float64, 8 * 8](1.0)
-    var g_storage      = InlineArray[Float64, 8 * 1](0.0)   # match 8x1
-    var theta_storage  = InlineArray[Float64, 8 * 1](1.0)
-
-    var pmat  = LayoutTensor[DType.float64, Layout.row_major(8, 8)](pmat_storage)
-    var g     = LayoutTensor[DType.float64, Layout.row_major(8, 1)](g_storage)
-    var theta = LayoutTensor[DType.float64, Layout.row_major(8, 1)](theta_storage)
-    pmat.slice[Slice(0,8),Slice(0,1)]().__imul__(1.5)
-    var h: Float64 = 0.4
-    pmat *= 3.0
-    print("Directions Matrix:\n", pmat)
-    print("Theta Matrix:\n", theta)
-    print("Gradient Matrix:\n", g)
-    var pmat_vec = pmat.vectorize[8,1]()
-    var d0 = pmat_vec.load[8](0, 0)
-    print("Directions SIMD first row:\n", d0)
-    var theta_vec = theta.vectorize[8,1]()
-    var th0 = theta_vec.load[8](0, 0)
-    print("Theta SIMD:\n", th0)
-    var g_vec = g.vectorize[8,1]()
-    var t = simd_step[8](pmat_vec.load[8](0, 0), h, theta_vec.load[8](0, 0)) 
-    print("Product tile:\n", t)
-    for j in range(1,8):
-        t = simd_step[8](pmat_vec.load[8](j, 0), h, theta_vec.load[8](0, 0))
-        var acc = g_vec.load[8](0, 0)
-        acc = acc + t
-        g_vec.store[8](0, 0, acc)
-        print("Accumulated g SIMD:\n", acc)
-    
+def main():
+    var params = AffineSvjParams(
+        0.03,
+        -0.15,
+        0.12,
+        0.35,
+        -0.04,
+        0.12,
+        -0.55,
+        0.04,
+        1.5,
+        0.3,
+        1.0 / 252.0,
+    )
+    var model = AffineSvjJointCF(params)
+    var frequencies = SIMD[DType.float64, 8](
+        0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75
+    )
+    var kappa = (
+        params.volvol * params.volvol / (2.0 * params.beta)
+    )
+    var nu = (
+        2.0 * params.beta * params.alpha
+        / (params.volvol * params.volvol)
+    )
+    var characteristic = model.predictive_cf_simd[8](
+        frequencies, 0.0, kappa, nu
+    )
+    print("frequencies:", frequencies)
+    print("characteristic function (real):", characteristic.re)
+    print("characteristic function (imag):", characteristic.im)

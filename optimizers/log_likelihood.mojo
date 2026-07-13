@@ -1,45 +1,79 @@
-from stochcharfunc.svj1 import Params, SvSpec
 from complexsimd.fourier import UniformGridInverterSIMDGrid
-from math import log
+from stochcharfunc.svj1 import AffineSvjJointCF
+from std.collections import List
+from std.math import log
+from std.utils.numerics import isfinite
 
-# Bates AML step: sum log densities via inverse Fourier and update Gamma prior.
-#
-# - y_vec: SIMD batch of observations (e.g., returns) [y_{t+1}^{(i)}]
-# - inverter: uniform-phi grid inverter (holds CF tiles)
-# - spec: model implementing SvSpec (e.g., Svj1JointCF)
-# - prior_params: InlineArray[3] = [y_t, kappa_t, nu_t]
-# - u0, du: φ-grid start and step (used by the prior update routine)
-# - normalize: pass-through to inverter/update to include 1/(2π)
-fn log_likelihood[S: SvSpec, L: Int](
-    y_vec: SIMD[DType.float64, L],
+
+struct AffineSvjFilterResult(ImplicitlyCopyable):
+    var likelihood: Float64
+    var final_kappa: Float64
+    var final_nu: Float64
+    var valid: Bool
+
+    def __init__(
+        out self,
+        likelihood: Float64,
+        final_kappa: Float64,
+        final_nu: Float64,
+        valid: Bool,
+    ):
+        self.likelihood = likelihood
+        self.final_kappa = final_kappa
+        self.final_nu = final_nu
+        self.valid = valid
+
+
+def filter_log_returns[L: Int](
+    returns: List[Float64],
     inverter: UniformGridInverterSIMDGrid[L],
-    spec: S,
-    prior_params: InlineArray[Float64, 3],
-    normalize: Bool = True,
-) -> SIMD[DType.float64, 1]:
-    var ll_sum: Float64 = 0.0
-    var prior = prior_params  # [y_t, kappa_t, nu_t]
-    var psi0 = SIMD[DType.float64, 1](0.0)
-    var eps: Float64 = 1e-300
+    model: AffineSvjJointCF,
+    initial_prior: InlineArray[Float64, 2],
+) -> AffineSvjFilterResult:
+    """Filter log-return increments using a Gamma variance prior [kappa, nu]."""
 
-    for i in range(L):
-        var x = Float64(y_vec[i])
-        # Step 2 (Bates): density via inverse Fourier at x = y_{t+1}
-        var z = inverter.inverse_at[S, 3](x, spec, psi0, prior, normalize)
-        var f = Float64(z.re[0])
-        # Guard against non-finite or non-positive densities
-        if (f != f) or (f <= 0.0):
-            f = eps
-        ll_sum += log(f)
+    var prior = initial_prior
+    if (
+        prior[0] <= 0.0
+        or prior[1] <= 0.0
+        or not isfinite(prior[0])[0]
+        or not isfinite(prior[1])[0]
+    ):
+        return AffineSvjFilterResult(-1e300, prior[0], prior[1], False)
 
-        # Update Gamma prior parameters using integrated ψ-derivatives
-        var (kappa_new, nu_new, _, _) = spec.update_gamma_prior_from_inverter[L](
-            inverter, prior, 1.0, 1.0, 1e-6, normalize
+    var likelihood = 0.0
+    for index in range(len(returns)):
+        var increment = returns[index]
+        var density = inverter.density(increment, model, prior)
+        if density <= 1e-300 or not isfinite(density)[0]:
+            return AffineSvjFilterResult(
+                -1e300, prior[0], prior[1], False
+            )
+        likelihood += log(density)
+
+        var update = inverter.update_gamma_prior(increment, model, prior)
+        if not update.valid:
+            return AffineSvjFilterResult(
+                -1e300, prior[0], prior[1], False
+            )
+        prior[0] = update.kappa
+        prior[1] = update.nu
+
+    if not isfinite(likelihood)[0]:
+        return AffineSvjFilterResult(
+            -1e300, prior[0], prior[1], False
         )
-        # Roll prior forward only if update is finite
-        prior[0] = x
-        if (kappa_new == kappa_new) and (nu_new == nu_new):
-            prior[1] = kappa_new
-            prior[2] = nu_new
+    return AffineSvjFilterResult(
+        likelihood, prior[0], prior[1], True
+    )
 
-    return SIMD[DType.float64, 1](ll_sum)
+
+def log_likelihood[L: Int](
+    returns: List[Float64],
+    inverter: UniformGridInverterSIMDGrid[L],
+    model: AffineSvjJointCF,
+    initial_prior: InlineArray[Float64, 2],
+) -> Float64:
+    return filter_log_returns[L](
+        returns, inverter, model, initial_prior
+    ).likelihood

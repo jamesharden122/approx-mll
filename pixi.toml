@@ -1,11 +1,16 @@
 [workspace]
 authors = ["jamesharden122 <loudonvillewf@gmail.com>"]
-channels = ["https://conda.modular.com/max-nightly", "conda-forge"]
+channels = ["conda-forge", "https://conda.modular.com/max"]
 name = "approx-mll"
 platforms = ["linux-64"]
 version = "0.1.0"
 
 [tasks]
+check = { cmd = "mojo build -I . -Xlinker -lm main.mojo -o /tmp/approx-mll-check", description = "Compile the repository example" }
+test = { cmd = "bash scripts/run_tests.sh", description = "Run all Mojo tests" }
+run = { cmd = "mojo run -I . main.mojo", description = "Run the repository example" }
+fit-svj = { cmd = "mojo run -I . fit_svj.mojo", description = "Fit affine SVJ parameters from big-endian log returns" }
+recovery = { cmd = "mojo run -I . -I ../simulations -Xlinker -lm recovery.mojo", description = "Run the slow 20-seed affine SVJ recovery regression" }
 
 [dependencies]
-mojo = ">=0.25.7.0.dev2025101518,<0.26"
+mojo = "==1.0.0b1"

@@ -1,109 +1,189 @@
-from complexsimd.complex_simd import ComplexSIMD
-from complexsimd.cf_grid_simd import CFGridSIMD
-from stochcharfunc.svj1 import Params, SvSpec
-from math import sin, cos
-
-# SIMD inverse Fourier helpers:
-# - Keeps SvSpec bound for the CF provider type.
-# - Computes phi per tile/lane from (u0, du).
-# - Uses reduce_sum across lanes.
+from stochcharfunc.svj1 import AffineSvjJointCF
+from std.math import cos, sin
+from std.utils.numerics import isfinite
 
 
-# Note: Generic trait declarations with parameters are limited; we omit a trait here.
+struct GammaUpdate(ImplicitlyCopyable):
+    var kappa: Float64
+    var nu: Float64
+    var conditional_mean: Float64
+    var conditional_variance: Float64
+    var density: Float64
+    var valid: Bool
+
+    def __init__(
+        out self,
+        kappa: Float64,
+        nu: Float64,
+        conditional_mean: Float64,
+        conditional_variance: Float64,
+        density: Float64,
+        valid: Bool,
+    ):
+        self.kappa = kappa
+        self.nu = nu
+        self.conditional_mean = conditional_mean
+        self.conditional_variance = conditional_variance
+        self.density = density
+        self.valid = valid
 
 
 struct UniformGridInverterSIMDGrid[L: Int](Copyable, Movable):
-    var grid: CFGridSIMD[DType.float64, L]
+    """Positive-frequency trapezoidal Fourier inverter.
 
-    fn __init__(out self, grid: CFGridSIMD[DType.float64, L]):
-        self.grid = grid.copy()
+    Positive-half inversion requires u0 = 0 so no frequency interval is
+    omitted. The origin remains explicit metadata for grid construction.
 
-    fn _inverse_transform_tile_simd[S: SvSpec, T: Int](
+    Frequencies are explicit metadata: u_j = u0 + j * du for j in
+    [0, count). The final SIMD tile is lane-masked when count is not divisible
+    by L. Conjugate symmetry supplies the negative-frequency half and the
+    normalization is therefore du / pi.
+    """
+
+    var u0: Float64
+    var du: Float64
+    var count: Int
+
+    def __init__(out self, u0: Float64, du: Float64, count: Int) raises:
+        if not isfinite(u0)[0] or u0 != 0.0:
+            raise Error("Fourier grid u0 must be exactly zero")
+        if not isfinite(du)[0] or du <= 0.0:
+            raise Error("Fourier grid du must be finite and positive")
+        if count < 2:
+            raise Error("Fourier grid requires at least two frequencies")
+        self.u0 = u0
+        self.du = du
+        self.count = count
+
+    def num_tiles(self) -> Int:
+        return (self.count + Self.L - 1) // Self.L
+
+    def frequency_tile(self, tile: Int) -> SIMD[DType.float64, Self.L]:
+        var frequencies = SIMD[DType.float64, Self.L](0.0)
+        for lane in range(Self.L):
+            var index = tile * Self.L + lane
+            if index < self.count:
+                frequencies[lane] = self.u0 + self.du * Float64(index)
+        return frequencies
+
+    def joint_density(
         self,
-        cb: S,
         x: Float64,
-        psi: SIMD[DType.float64, 1],
-        prior_params: InlineArray[Float64, T],  # [y, kappa, nu]
-        tile_idx: Int,
-    ) -> ComplexSIMD[DType.float64, L]:
-        # Build phi lanes: phi_j = u0 + du * (tile_idx * L + j)
-        var phi = self.grid.re_tiles[tile_idx] - self.grid.re_tiles[tile_idx].shift_left[1]()
-        # Model CF (real and imaginary parts) evaluated at phi
-        var re = cb.predictive_cf_latent_simd_re[L, T](phi, psi, prior_params)
-        var im = cb.predictive_cf_latent_simd_im[L, T](phi, psi, prior_params)
+        psi: Float64,
+        model: AffineSvjJointCF,
+        prior: InlineArray[Float64, 2],
+    ) -> Float64:
+        if (
+            not isfinite(x)[0]
+            or not isfinite(psi)[0]
+            or not isfinite(prior[0])[0]
+            or not isfinite(prior[1])[0]
+            or prior[0] <= 0.0
+            or prior[1] <= 0.0
+        ):
+            return -1.0
 
-        # Multiply by e^{-i phi x}
-        var theta = phi * SIMD[DType.float64, L](-x)
-        var c = cos(theta)
-        var s = sin(theta)
-        var tile_re = re * c - im * s
-        var tile_im = re * s + im * c.shift_left[1]()
-        return ComplexSIMD[DType.float64, L](tile_re, tile_im)
+        var integral = 0.0
+        for tile in range(self.num_tiles()):
+            var frequencies = self.frequency_tile(tile)
+            var transform = model.predictive_cf_simd[Self.L](
+                frequencies, psi, prior[0], prior[1]
+            )
+            for lane in range(Self.L):
+                var index = tile * Self.L + lane
+                if index < self.count:
+                    var u = Float64(frequencies[lane])
+                    var angle = -u * x
+                    var rotated_real = Float64(transform.re[lane]) * cos(
+                        angle
+                    ) - Float64(transform.im[lane]) * sin(angle)
+                    var weight = 1.0
+                    if index == 0 or index == self.count - 1:
+                        weight = 0.5
+                    integral += weight * rotated_real
+        var result = integral * self.du / 3.14159265358979323846
+        if not isfinite(result)[0]:
+            return -1.0
+        return result
 
-    fn inverse_at[S: SvSpec, T: Int](
+    def density(
         self,
         x: Float64,
-        cb: S,
-        psi: SIMD[DType.float64, 1],
-        prior_params: InlineArray[Float64, T],  # [y, kappa, nu]
-        normalize: Bool = True,
-    ) -> ComplexSIMD[DType.float64, 1]:
-        var two_pi: Float64 = 6.283185307179586
-        var tiles: Int = self.grid.num_tiles()
-        var acc_re: Float64 = 0.0
-        var acc_im: Float64 = 0.0
-        var scale: Float64 = (1.0 / two_pi) if normalize else 1.0
+        model: AffineSvjJointCF,
+        prior: InlineArray[Float64, 2],
+    ) -> Float64:
+        return self.joint_density(x, 0.0, model, prior)
 
-        for t in range(tiles):
-            var z_tile = self._inverse_transform_tile_simd[S, T](cb, x, psi, prior_params, t)
-            var sum_re = z_tile.re.reduce_add()[0]
-            var sum_im = z_tile.im.reduce_add()[0]
-            acc_re += Float64(sum_re) * scale
-            acc_im += Float64(sum_im) * scale
-
-        return ComplexSIMD[DType.float64, 1].from_scalars(acc_re, acc_im)
-
-    # inverse_at_with_psi intentionally omitted; use inverse_at with SIMD psi.
-
-    # Optimized: compute ψ = {-h, 0, +h} in ONE pass over tiles
-    fn inverse_three_psi[S: SvSpec, T: Int](
+    def update_gamma_prior(
         self,
-        u0: Float64,
-        du: Float64,
-        cb: S,
-        prior_params: InlineArray[Float64, T],  # [y, kappa, nu]
-        h: Float64,
-        normalize: Bool = True,
-    ) -> (Float64, Float64, Float64):  # returns Re at (-h, 0, +h)
-        var two_pi: Float64 = 6.283185307179586
-        var tiles: Int = self.grid.num_tiles()
-        var scale: Float64 = (1.0 / two_pi) if normalize else 1.0
-        var acc_mh: Float64 = 0.0
-        var acc_0:  Float64 = 0.0
-        var acc_ph: Float64 = 0.0
-        for t in range(tiles):
-            # Build phi lanes once
-            var phi = self.grid.re_tiles[t] - self.grid.re_tiles[t].shift_left[1]()
-            # Precompute exp(-i phi x) parts once
-            var theta = phi * SIMD[DType.float64, L](-prior_params[0])
-            var c = cos(theta)
-            var s = sin(theta)
+        x: Float64,
+        model: AffineSvjJointCF,
+        prior: InlineArray[Float64, 2],
+        h: Float64 = 1e-3,
+    ) -> GammaUpdate:
+        if not isfinite(h)[0] or h <= 0.0:
+            return GammaUpdate(prior[0], prior[1], 0.0, 0.0, -1.0, False)
+        var p_minus = self.joint_density(x, -h, model, prior)
+        var p_zero = self.joint_density(x, 0.0, model, prior)
+        var p_plus = self.joint_density(x, h, model, prior)
+        if (
+            p_zero <= 1e-300
+            or not isfinite(p_zero)[0]
+            or not isfinite(p_minus)[0]
+            or not isfinite(p_plus)[0]
+        ):
+            return GammaUpdate(
+                prior[0],
+                prior[1],
+                prior[0] * prior[1],
+                prior[0] * prior[0] * prior[1],
+                p_zero,
+                False,
+            )
 
-            # ψ = -h, 0, +h evaluations
-            var re_mh = cb.predictive_cf_latent_simd_re[L, T](phi, SIMD[DType.float64, 1](-h), prior_params)
-            var im_mh = cb.predictive_cf_latent_simd_im[L, T](phi, SIMD[DType.float64, 1](-h), prior_params)
-            var re_0  = cb.predictive_cf_latent_simd_re[L, T](phi, SIMD[DType.float64, 1](0.0), prior_params)
-            var im_0  = cb.predictive_cf_latent_simd_im[L, T](phi, SIMD[DType.float64, 1](0.0), prior_params)
-            var re_ph = cb.predictive_cf_latent_simd_re[L, T](phi, SIMD[DType.float64, 1](h), prior_params)
-            var im_ph = cb.predictive_cf_latent_simd_im[L, T](phi, SIMD[DType.float64, 1](h), prior_params)
+        var conditional_mean = (p_plus - p_minus) / (2.0 * h * p_zero)
+        var conditional_second = (p_plus - 2.0 * p_zero + p_minus) / (
+            h * h * p_zero
+        )
+        var conditional_variance = (
+            conditional_second - conditional_mean * conditional_mean
+        )
+        if (
+            conditional_mean <= 0.0
+            or conditional_variance <= 1e-16
+            or not isfinite(conditional_mean)[0]
+            or not isfinite(conditional_variance)[0]
+        ):
+            return GammaUpdate(
+                prior[0],
+                prior[1],
+                conditional_mean,
+                conditional_variance,
+                p_zero,
+                False,
+            )
 
-            # rotate by e^{-i phi x}
-            var mh_re = re_mh * c - im_mh * s
-            var zero_re = re_0  * c - im_0  * s
-            var ph_re = re_ph * c - im_ph * s
-
-            acc_mh += Float64(mh_re.reduce_add()) * scale
-            acc_0  += Float64(zero_re.reduce_add()) * scale
-            acc_ph += Float64(ph_re.reduce_add()) * scale
-
-        return (acc_mh, acc_0, acc_ph)
+        var kappa = conditional_variance / conditional_mean
+        var nu = conditional_mean * conditional_mean / conditional_variance
+        if (
+            kappa <= 0.0
+            or nu <= 0.0
+            or not isfinite(kappa)[0]
+            or not isfinite(nu)[0]
+        ):
+            return GammaUpdate(
+                prior[0],
+                prior[1],
+                conditional_mean,
+                conditional_variance,
+                p_zero,
+                False,
+            )
+        return GammaUpdate(
+            kappa,
+            nu,
+            conditional_mean,
+            conditional_variance,
+            p_zero,
+            True,
+        )

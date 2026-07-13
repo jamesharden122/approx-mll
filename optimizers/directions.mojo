@@ -1,53 +1,47 @@
-from layout import Layout, LayoutTensor
-from random import randn
-from memory.unsafe_pointer import UnsafePointer
-struct DirMethod:
+from std.random import randn
+
+
+struct DirMethod(Copyable, Movable):
     var raw: Int32
 
-    fn __init__(out self, raw: Int32):
+    def __init__(out self, raw: Int32):
         self.raw = raw
 
     @staticmethod
-    fn Gaussian() -> DirMethod:
-        return DirMethod(Int32(0))
+    def Gaussian() -> Self:
+        return Self(Int32(0))
 
     @staticmethod
-    fn Identity() -> DirMethod:
-        return DirMethod(Int32(1))
-    
+    def Identity() -> Self:
+        return Self(Int32(1))
+
 
 struct DirectionMat[D: Int](Copyable, Movable):
-    alias array = InlineArray[Float64, D * D]
-    alias matrix =  LayoutTensor[DType.float64, Layout.row_major(D, D), MutableAnyOrigin] 
-    var p_mat: Self.matrix
+    """Owns a row-major D-by-D finite-difference direction matrix."""
 
-    fn __init__(out self, method: DirMethod):
-        if method.raw == 0:
-            print("method: Gaussian")
-            var storage = self._gaussian()
-            self.p_mat = Self.matrix(storage)
-        elif method.raw == 1:
-            print("method: Identity")
-            var storage = self._identity()
-            self.p_mat = Self.matrix(storage)
-        else: 
-            print("method: Other")
-            var storage = Self.array(uninitialized=True)
-            self.p_mat = Self.matrix(storage)
-        print(self.p_mat)
+    var p_mat: InlineArray[Float64, Self.D * Self.D]
 
-        
+    def __init__(out self, method: DirMethod):
+        if method.raw == DirMethod.Gaussian().raw:
+            self.p_mat = Self._gaussian()
+        elif method.raw == DirMethod.Identity().raw:
+            self.p_mat = Self._identity()
+        else:
+            self.p_mat = InlineArray[Float64, Self.D * Self.D](fill=0.0)
+
     @staticmethod
-    fn _gaussian(mu: Float64 = 0.0, sigma: Float64 = 1.0) -> Self.array:
-        var storage = Self.array(uninitialized=True)
-        ptr = storage.unsafe_ptr()
-        randn[DType.float64](ptr,D*D,mu,sigma)
+    def _gaussian(
+        mu: Float64 = 0.0, sigma: Float64 = 1.0
+    ) -> InlineArray[Float64, Self.D * Self.D]:
+        var storage = InlineArray[Float64, Self.D * Self.D](uninitialized=True)
+        randn[DType.float64](
+            storage.unsafe_ptr(), Self.D * Self.D, mu, sigma
+        )
         return storage
-    
-    @staticmethod
-    fn _identity() -> Self.array:
-        var storage = Self.array(0)
-        for i in range(D): storage[i * D + i] = 1.0
-        return storage
-        
 
+    @staticmethod
+    def _identity() -> InlineArray[Float64, Self.D * Self.D]:
+        var storage = InlineArray[Float64, Self.D * Self.D](fill=0.0)
+        for i in range(Self.D):
+            storage[i * Self.D + i] = 1.0
+        return storage

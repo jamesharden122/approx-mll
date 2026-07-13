@@ -1,46 +1,99 @@
-from math import sin, cos
+from std.math import atan2, cos, exp, log, sin, sqrt
+
 
 struct ComplexSIMD[T: DType, L: Int]:
-    var re: SIMD[T, L]
-    var im: SIMD[T, L]
+    var re: SIMD[Self.T, Self.L]
+    var im: SIMD[Self.T, Self.L]
 
-    fn __init__(out self, re: SIMD[T, L], im: SIMD[T, L]):
+    def __init__(out self, re: SIMD[Self.T, Self.L], im: SIMD[Self.T, Self.L]):
         self.re = re
         self.im = im
 
     @staticmethod
-    fn zero() -> Self:
-        return Self(SIMD[T, L](), SIMD[T, L]())
+    def zero() -> Self:
+        return Self(SIMD[Self.T, Self.L](), SIMD[Self.T, Self.L]())
 
     @staticmethod
-    fn from_scalars(r: Scalar[T], i: Scalar[T]) -> Self:
-        return Self(SIMD[T, L](r), SIMD[T, L](i))
+    def from_scalars(r: Scalar[Self.T], i: Scalar[Self.T]) -> Self:
+        return Self(SIMD[Self.T, Self.L](r), SIMD[Self.T, Self.L](i))
 
-    fn add(self, other: Self) -> Self:
+    def add(self, other: Self) -> Self:
         return Self(self.re + other.re, self.im + other.im)
 
-    fn sub(self, other: Self) -> Self:
+    def sub(self, other: Self) -> Self:
         return Self(self.re - other.re, self.im - other.im)
 
-    fn mul(self, other: Self) -> Self:
+    def scale(self, value: SIMD[Self.T, Self.L]) -> Self:
+        return Self(self.re * value, self.im * value)
+
+    def mul(self, other: Self) -> Self:
         var ac = self.re * other.re
         var bd = self.im * other.im
         var ad = self.re * other.im
         var bc = self.im * other.re
         return Self(ac - bd, ad + bc)
 
-    fn conj(self) -> Self:
+    def div(self, other: Self) -> Self where Self.T.is_floating_point():
+        var denominator = (
+            other.re * other.re
+            + other.im * other.im
+            + SIMD[Self.T, Self.L](1e-300)
+        )
+        return Self(
+            (self.re * other.re + self.im * other.im) / denominator,
+            (self.im * other.re - self.re * other.im) / denominator,
+        )
+
+    def conj(self) -> Self:
         return Self(self.re, -self.im)
 
-    @staticmethod
-    fn exp_i(theta: SIMD[T, L]) -> Self:
-        var c = cos(theta)
-        var s = sin(theta)
-        return Self(c, s)
+    def exp(self) -> Self where Self.T.is_floating_point():
+        var magnitude = exp(self.re)
+        return Self(magnitude * cos(self.im), magnitude * sin(self.im))
 
-    fn mul_exp_i(self, theta: SIMD[T, L]) -> Self:
+    def log(self) -> Self where Self.T.is_floating_point():
+        var magnitude_squared = (
+            self.re * self.re
+            + self.im * self.im
+            + SIMD[Self.T, Self.L](1e-300)
+        )
+        return Self(
+            SIMD[Self.T, Self.L](0.5) * log(magnitude_squared),
+            atan2(self.im, self.re),
+        )
+
+    def sqrt(self) -> Self where Self.T.is_floating_point():
+        var magnitude = sqrt(self.re * self.re + self.im * self.im)
+        var real_squared = (
+            SIMD[Self.T, Self.L](0.5) * (magnitude + self.re)
+        )
+        var imag_squared = (
+            SIMD[Self.T, Self.L](0.5) * (magnitude - self.re)
+        )
+        for lane in range(Self.L):
+            if real_squared[lane] < 0:
+                real_squared[lane] = 0
+            if imag_squared[lane] < 0:
+                imag_squared[lane] = 0
+        var real_part = sqrt(real_squared)
+        var imag_part = sqrt(imag_squared)
+        for lane in range(Self.L):
+            if self.im[lane] < 0:
+                imag_part[lane] = -imag_part[lane]
+        return Self(real_part, imag_part)
+
+    @staticmethod
+    def exp_i(
+        theta: SIMD[Self.T, Self.L]
+    ) -> Self where Self.T.is_floating_point():
+        return Self(cos(theta), sin(theta))
+
+    def mul_exp_i(
+        self, theta: SIMD[Self.T, Self.L]
+    ) -> Self where Self.T.is_floating_point():
         var c = cos(theta)
         var s = sin(theta)
-        var re = self.re * c - self.im * s
-        var im = self.re * s + self.im * c
-        return Self(re, im)
+        return Self(
+            self.re * c - self.im * s,
+            self.re * s + self.im * c,
+        )
